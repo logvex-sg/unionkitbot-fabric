@@ -9,7 +9,6 @@
 	],
 	"contact": {},
 	"license": "MIT",
-	"icon": "assets/unionkitbot/icon.png",
 	"environment": "client",
 	"entrypoints": {
 		"client": [
