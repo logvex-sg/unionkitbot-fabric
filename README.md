@@ -28,6 +28,193 @@ all, and you can run the bot with no Minecraft client running.
 
 ---
 
+## 0. Setup guide
+
+End-to-end walkthrough for a fresh machine. Sections 1–10 afterwards are deeper
+reference on the same topics; you do not need them to get running.
+
+### 0.1 What you need
+
+| Requirement | Version | Why |
+| --- | --- | --- |
+| JDK | 21 | To build the mod |
+| Node.js | 20.11+ | To run the Discord bot |
+| Minecraft Java Edition | 1.21.11 | With a Fabric profile |
+| Fabric Loader | for 1.21.11 | From the Fabric installer |
+| Fabric API | for 1.21.11 | From Modrinth |
+
+The mod is client-side only. Do not install it on a server, and you do not need to be
+an operator anywhere.
+
+### 0.2 Get the code
+
+```bash
+git clone https://github.com/logvex-sg/unionkitbot-fabric.git
+cd unionkitbot-fabric
+```
+
+If you downloaded a zip instead, note that it is not a git repository: `git pull` will
+not work in it. Prefer the clone.
+
+### 0.3 Build the mod
+
+```bash
+cd minecraft-mod
+chmod +x gradlew
+./gradlew build
+```
+
+The `chmod` matters when the folder came from a zip; without it Gradle reports
+`Permission denied`. The first build needs network access, because Loom downloads
+Minecraft, the Mojang mappings and Fabric API. Later builds work with
+`./gradlew build --offline`.
+
+Outputs land in `minecraft-mod/build/libs/`:
+
+| File | Purpose |
+| --- | --- |
+| `unionkitbot-fabric-0.1.0.jar` | Install this one |
+| `unionkitbot-fabric-0.1.0-sources.jar` | Sources |
+| `unionkitbot-fabric-0.1.0-headless.jar` | Logic-only, for tooling without Minecraft |
+
+Run the tests with `./gradlew test`.
+
+### 0.4 Install the mod
+
+1. Run the Fabric installer for Minecraft 1.21.11 and create a profile.
+2. Put Fabric API for 1.21.11 into your mods folder.
+3. Put `unionkitbot-fabric-0.1.0.jar` into the same folder.
+4. Launch the game with the Fabric profile.
+
+The mods folder is `%appdata%\.minecraft\mods` on Windows,
+`~/Library/Application Support/minecraft/mods` on macOS, and `~/.minecraft/mods` on
+Linux.
+
+Launch the game at least once before continuing. That first run generates the API
+secret needed in step 0.6. Confirm it exists:
+
+```bash
+cat ~/.minecraft/config/unionkitbot/unionkitbot.secret
+```
+
+You should see a 64-character hex string. The mod also writes `unionkitbot.json`
+alongside it, holding the non-secret settings. That JSON is safe to share when
+reporting a bug, because the secret is deliberately kept out of it.
+
+### 0.5 Create the Discord application
+
+1. Create an application in the
+   [Discord Developer Portal](https://discord.com/developers/applications).
+2. Open **Bot**, then **Reset Token**, and copy the token. Treat it as a password:
+   anyone holding it controls your bot.
+3. Copy the **Application ID** from **General Information**.
+4. Leave the **Public Key** alone. The bot connects over the Discord Gateway rather
+   than an HTTP interactions endpoint, so nothing reads it.
+5. Do **not** enable privileged intents. The bot requests only `Guilds`, which is not
+   privileged; slash commands work without Message Content or Server Members.
+6. Invite the bot via **OAuth2 → URL Generator** with scopes `bot` and
+   `applications.commands` and permissions **Send Messages** and **Embed Links**.
+   Responses are embeds, so without Embed Links the commands fail.
+
+For your own user ID, enable Developer Mode in Discord settings, then right-click
+yourself and choose **Copy User ID**.
+
+### 0.6 Configure and run the bot
+
+```bash
+cd discord-bot
+npm install
+cp .env.example .env
+```
+
+Fill in the values that matter:
+
+```bash
+DISCORD_TOKEN=                 # from 0.5
+DISCORD_APPLICATION_ID=        # from 0.5
+DISCORD_ADMIN_USER_IDS=        # your user ID; comma-separated for several people
+MOD_API_SECRET=                # from 0.4
+```
+
+Everything else has a sensible default; see section 5 for the full table. You must set
+at least one admin user ID or admin role ID, because there is no "allow everyone"
+fallback and the bot refuses to start without one.
+
+Lock the file down, then copy the mod secret into it:
+
+```bash
+chmod 600 .env
+sed -i "s|^MOD_API_SECRET=.*|MOD_API_SECRET=$(cat ~/.minecraft/config/unionkitbot/unionkitbot.secret)|" .env
+npm run build && npm test
+```
+
+Verify without printing the secrets to your terminal scrollback:
+
+```bash
+grep -E '^(DISCORD_TOKEN|DISCORD_APPLICATION_ID|DISCORD_ADMIN_USER_IDS|MOD_API_SECRET)=' .env | sed 's/=.\{6\}.*/=<set>/'
+```
+
+Then start it:
+
+```bash
+npm run register-commands
+npm start
+```
+
+Commands are also registered automatically on every startup, so `register-commands` is
+mainly a convenience while iterating. Use `npm run dev` to recompile TypeScript on
+change.
+
+Startup order does not matter. Start the bot first and it retries with exponential
+backoff and jitter until Minecraft appears; start Minecraft first and the bot connects
+on its next attempt. Stop with Ctrl+C: the bot handles `SIGINT` and `SIGTERM`, closes
+the mod socket and destroys the Discord client, leaving no half-open socket behind.
+
+### 0.7 Verify
+
+1. Minecraft is running with the mod loaded. The mod logs the bound port at startup,
+   `127.0.0.1:8765` by default.
+2. The bot logs a successful mod connection once the WebSocket handshake completes.
+3. Run `/status` in Discord. You should see the state, connection status, queue depth
+   and module toggles.
+
+Automation is **off** by default. `/status` reporting `IDLE` with automation off is
+correct rather than a fault; run `/start` when you want it running.
+
+In game, press `K` (rebindable under Controls → Miscellaneous) for the status and
+configuration screen, or use `/unionkitbot`, `/unionkitbot status`,
+`/unionkitbot start` and `/unionkitbot stop`.
+
+### 0.8 Setup troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| `./gradlew: Permission denied` | Run `chmod +x gradlew` |
+| Bot says the client is unreachable | Minecraft not running with the mod, or `MOD_API_URL` does not match `api.host`/`api.port` |
+| `401 unauthorized` on connect | Secrets differ; re-read `unionkitbot.secret` and copy it exactly. Trailing whitespace is the usual cause |
+| `403 forbidden` on connect | Mod bound to a non-loopback address while `api.allowRemote` is `false` |
+| `missing required environment variable` | Bot exits naming the variable; set `DISCORD_TOKEN`, `DISCORD_APPLICATION_ID` and `MOD_API_SECRET` |
+| Commands missing in Discord | Set `DISCORD_GUILD_ID` for instant registration; global commands take up to an hour. Check the `applications.commands` scope |
+| Commands time out | The mod answers on the client thread; a paused, minimised or sleeping client times out |
+| Automation idle | Automation is off by default. Run `/start`, check a module is on, and check `/tasks` |
+| Mod tests fail on a fresh clone | Run `./gradlew build` online once; `--offline` works afterwards |
+
+Section 10 covers the rest.
+
+### 0.9 Security essentials
+
+- Never commit `.env`. It is git-ignored; keep it that way and `chmod 600` it.
+- The API binds loopback only by default. To control a client from another machine you
+  must set `api.allowRemote` to `true`, set an explicit `api.allowedOrigins` list, and
+  put a TLS proxy in front, on a network you control.
+- The bot redacts the Discord token and the mod secret from every log line and never
+  echoes them in a Discord response.
+- If a token leaks, reset it in the Developer Portal immediately. To rotate the mod
+  secret, delete `unionkitbot.secret`, restart Minecraft, then update
+  `MOD_API_SECRET` in `.env`.
+
+---
+
 ## 1. Repository architecture
 
 ```
