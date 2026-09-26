@@ -2,9 +2,11 @@ package dev.unionkitbot.fabric.config;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.SecureRandom;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
@@ -17,10 +19,10 @@ import dev.unionkitbot.fabric.core.util.Json;
 /**
  * Loads, stores and observes {@link AgentConfig}.
  *
- * <p>The API secret is intentionally excluded from the on-disk document. Operators
- * provide it through {@code config/unionkitbot.secret} or the
- * {@code UNIONKITBOT_API_SECRET} environment variable, which keeps it out of any
- * file that might be shared when reporting a bug.
+ * <p>The API secret is intentionally excluded from the on-disk JSON document. It is
+ * generated on first run and kept in {@code config/unionkitbot.secret}, so the JSON
+ * can be shared when reporting a bug without leaking a credential. The
+ * {@code UNIONKITBOT_API_SECRET} environment variable overrides the file.
  */
 public final class ConfigManager {
 	/** File name of the JSON configuration document. */
@@ -31,6 +33,18 @@ public final class ConfigManager {
 
 	/** Environment variable that overrides the secret file. */
 	public static final String SECRET_ENV = "UNIONKITBOT_API_SECRET";
+
+	/** Length in bytes of a generated secret; 32 bytes is 256 bits of entropy. */
+	private static final int GENERATED_SECRET_BYTES = 32;
+
+	/**
+	 * Alphabet for generated secrets. Lowercase hex only: the value has to survive
+	 * being copied by hand into a bot's {@code .env}, so it avoids characters that
+	 * are easy to misread or that a shell or dotenv parser would treat specially.
+	 */
+	private static final char[] SECRET_ALPHABET = "0123456789abcdef".toCharArray();
+
+	private static final SecureRandom RANDOM = new SecureRandom();
 
 	private final Path directory;
 	private final AtomicReference<AgentConfig> current = new AtomicReference<>(AgentConfig.defaults());
@@ -99,7 +113,7 @@ public final class ConfigManager {
 		} else {
 			lastLoadError = null;
 		}
-		loaded = applySecret(loaded);
+		loaded = resolveSecret(loaded);
 		current.set(loaded);
 		if (!Files.isRegularFile(file)) {
 			save();
@@ -108,27 +122,95 @@ public final class ConfigManager {
 		return loaded;
 	}
 
-	private AgentConfig applySecret(AgentConfig base) {
+	/**
+	 * Resolves the API secret, generating and persisting one on first run.
+	 *
+	 * <p>Without this the control API can never bind on a fresh install: the server
+	 * refuses to start when no secret is configured, so a secret that was never
+	 * written would leave operators with no file to copy and no API to connect to.
+	 * The environment variable wins over the file, and the generated value is written
+	 * with owner-only permissions where the filesystem supports them.
+	 *
+	 * @param base the configuration to attach the secret to
+	 * @return the configuration with a secret when one could be resolved or created
+	 */
+	private AgentConfig resolveSecret(AgentConfig base) {
 		String fromEnv = System.getenv(SECRET_ENV);
 		if (fromEnv != null && fromEnv.trim().length() >= AgentConfig.MIN_SECRET_LENGTH) {
 			return withApiSecret(base, fromEnv.trim());
 		}
 		Path secretFile = directory.resolve(SECRET_FILE);
-		if (!Files.isRegularFile(secretFile)) {
-			return base;
-		}
-		try {
-			String secret = Files.readString(secretFile, StandardCharsets.UTF_8).trim();
-			if (secret.length() >= AgentConfig.MIN_SECRET_LENGTH) {
-				return withApiSecret(base, secret);
+		if (Files.isRegularFile(secretFile)) {
+			try {
+				String secret = Files.readString(secretFile, StandardCharsets.UTF_8).trim();
+				if (secret.length() >= AgentConfig.MIN_SECRET_LENGTH) {
+					return withApiSecret(base, secret);
+				}
+				lastLoadError = "secret in " + secretFile + " is shorter than "
+						+ AgentConfig.MIN_SECRET_LENGTH + " characters; a replacement was generated";
+			} catch (IOException e) {
+				lastLoadError = "cannot read " + secretFile + ": " + e.getMessage();
+				return base;
 			}
-			lastLoadError = "secret in " + secretFile + " is shorter than " + AgentConfig.MIN_SECRET_LENGTH
-					+ " characters; it was ignored";
-			return base;
+		}
+		return createSecret(base, secretFile);
+	}
+
+	/**
+	 * Generates a secret, writes it to disk and attaches it to the configuration.
+	 *
+	 * @param base the configuration to attach the secret to
+	 * @param secretFile the destination path
+	 * @return the configuration with the generated secret, or {@code base} when the
+	 *         file could not be written
+	 */
+	private AgentConfig createSecret(AgentConfig base, Path secretFile) {
+		String generated = generateSecret();
+		try {
+			Files.createDirectories(directory);
+			Files.writeString(secretFile, generated + System.lineSeparator(), StandardCharsets.UTF_8);
+			restrictToOwner(secretFile);
 		} catch (IOException e) {
-			lastLoadError = "cannot read " + secretFile + ": " + e.getMessage();
+			lastLoadError = "cannot write " + secretFile + ": " + e.getMessage() + "; set " + SECRET_ENV
+					+ " to enable the control API";
 			return base;
 		}
+		return withApiSecret(base, generated);
+	}
+
+	/**
+	 * Removes group and other permissions from a secret file where the filesystem
+	 * supports POSIX permissions. A failure here is not fatal: the secret is still
+	 * usable, and on Windows the permissions model is different anyway.
+	 *
+	 * @param secretFile the file to restrict
+	 */
+	private void restrictToOwner(Path secretFile) {
+		try {
+			Files.setPosixFilePermissions(secretFile, java.util.Set.of(
+					java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+					java.nio.file.attribute.PosixFilePermission.OWNER_WRITE));
+		} catch (UnsupportedOperationException | AccessDeniedException e) {
+			// Not a POSIX filesystem, or the platform refused the change. The secret is
+			// still written; only the hardening step is skipped.
+		} catch (IOException e) {
+			lastLoadError = "wrote " + secretFile + " but could not restrict its permissions: " + e.getMessage();
+		}
+	}
+
+	/**
+	 * @return a fresh random secret in lowercase hex
+	 */
+	private static String generateSecret() {
+		byte[] bytes = new byte[GENERATED_SECRET_BYTES];
+		RANDOM.nextBytes(bytes);
+		char[] out = new char[bytes.length * 2];
+		for (int i = 0; i < bytes.length; i++) {
+			int value = bytes[i] & 0xFF;
+			out[i * 2] = SECRET_ALPHABET[value >>> 4];
+			out[i * 2 + 1] = SECRET_ALPHABET[value & 0x0F];
+		}
+		return new String(out);
 	}
 
 	private static AgentConfig withApiSecret(AgentConfig base, String secret) {
