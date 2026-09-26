@@ -1,0 +1,26 @@
+{
+	"schemaVersion": 1,
+	"id": "unionkitbot",
+	"version": "${version}",
+	"name": "UnionKitBot Fabric",
+	"description": "Client-side automation agent with a local, authenticated control API for a separate Discord bot. Manages navigation, delivery, scanning and recovery tasks through an explicit state machine, and keeps running safely when the controller is offline.",
+	"authors": [
+		"UnionKitBot"
+	],
+	"contact": {},
+	"license": "MIT",
+	"icon": "assets/unionkitbot/icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"dev.unionkitbot.fabric.client.UnionKitBotClient"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.0",
+		"fabric-api": "*",
+		"minecraft": "~1.21.11",
+		"java": ">=21"
+	},
+	"suggests": {}
+}

@@ -1,0 +1,135 @@
+plugins {
+	id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
+	id 'maven-publish'
+}
+
+repositories {
+	mavenCentral()
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		"unionkitbot" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+// Standalone dependencies for the headless agent jar. Kept out of the mod
+// classpath so they cannot clash with the libraries Minecraft already ships.
+configurations {
+	headlessRuntime
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings loom.officialMojangMappings()
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	headlessRuntime "com.google.code.gson:gson:2.11.0"
+
+	testImplementation "org.junit.jupiter:junit-jupiter:${project.junit_version}"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+// Exposes the build version to BuildInfo without hard-coding it in Java.
+def versionOutputDir = layout.buildDirectory.dir('generated/version')
+tasks.register('generateVersionProperties') {
+	def outputDir = versionOutputDir
+	def version = project.version
+	outputs.dir(outputDir)
+	doLast {
+		def file = outputDir.get().file('unionkitbot-version.properties').asFile
+		file.parentFile.mkdirs()
+		file.text = "version=" + version + "\n"
+	}
+}
+
+sourceSets.main.resources.srcDir(tasks.named('generateVersionProperties'))
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 21
+	it.options.encoding = 'UTF-8'
+}
+
+java {
+	withSourcesJar()
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
+}
+
+jar {
+	def projectName = project.name
+	inputs.property "projectName", projectName
+	from("LICENSE") {
+		rename { "${it}_$projectName" }
+	}
+}
+
+// Runnable, dependency-free jar exposing the same HTTP/WebSocket control API as
+// the in-game mod. Useful for exercising the Discord bot without a Minecraft client.
+tasks.register('headlessJar', Jar) {
+	group = 'unionkitbot'
+	description = 'Builds the standalone headless agent jar.'
+	archiveClassifier = 'headless'
+	dependsOn tasks.named('classes')
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+	from sourceSets.main.output
+	from({
+		configurations.headlessRuntime.collect { it.isDirectory() ? it : zipTree(it) }
+	})
+
+	exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'META-INF/LICENSE*', 'module-info.class'
+
+	manifest {
+		attributes(
+			'Main-Class': 'dev.unionkitbot.fabric.headless.HeadlessAgentMain',
+			'Implementation-Title': 'UnionKitBot Fabric Headless Agent',
+			'Implementation-Version': project.version
+		)
+	}
+}
+
+tasks.register('runHeadless', JavaExec) {
+	group = 'unionkitbot'
+	description = 'Runs the headless agent from compiled classes.'
+	dependsOn tasks.named('classes')
+	classpath = sourceSets.main.runtimeClasspath + configurations.headlessRuntime
+	mainClass = 'dev.unionkitbot.fabric.headless.HeadlessAgentMain'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+	testLogging {
+		events 'passed', 'skipped', 'failed'
+		exceptionFormat = 'full'
+	}
+}
+
+tasks.named('build') {
+	dependsOn tasks.named('headlessJar')
+}
+
+publishing {
+	publications {
+		create("mavenJava", MavenPublication) {
+			from components.java
+		}
+	}
+	repositories {
+	}
+}

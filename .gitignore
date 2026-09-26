@@ -1,0 +1,52 @@
+# Build output
+build/
+out/
+dist/
+dist-test/
+bin/
+target/
+
+# Gradle
+.gradle/
+gradle-app.setting
+.gradletasknamecache
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.secret
+*.pem
+*.key
+*.p12
+*.jks
+
+# Minecraft runtime artefacts
+run/
+logs/
+crash-reports/
+minecraft-mod/config/
+
+# Editor and OS noise
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+.DS_Store
+Thumbs.db
+
+# Test and coverage output
+coverage/
+*.lcov
+.vitest/
+.agent_tmp/
