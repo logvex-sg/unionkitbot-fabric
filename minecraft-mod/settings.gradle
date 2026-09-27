@@ -9,4 +9,11 @@ pluginManagement {
 	}
 }
 
+plugins {
+	// Lets Gradle obtain the JDK 25 that Fabric Loom 1.18.2 requires when no
+	// local installation is present, so a plain ./gradlew build works on a
+	// machine that only has a JDK 21. See gradle/gradle-daemon-jvm.properties.
+	id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
 rootProject.name = 'unionkitbot-fabric'

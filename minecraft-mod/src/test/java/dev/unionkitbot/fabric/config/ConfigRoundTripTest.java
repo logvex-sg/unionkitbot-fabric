@@ -181,6 +181,47 @@ class ConfigRoundTripTest {
         }
 
         @Test
+        void anAnnotatedReferenceCopySitsBesideTheLiveFile(@TempDir Path directory) throws Exception {
+                ConfigManager manager = new ConfigManager(directory);
+                manager.load();
+
+                Path example = directory.resolve(ConfigManager.EXAMPLE_FILE);
+                assertTrue(Files.isRegularFile(example), "the annotated copy should exist");
+                assertTrue(Files.readString(example, StandardCharsets.UTF_8).contains("//"),
+                                "the reference copy should carry comments");
+        }
+
+        @Test
+        void savingKeepsAPointerToTheAnnotatedCopy(@TempDir Path directory) throws Exception {
+                ConfigManager manager = new ConfigManager(directory);
+                AgentConfig config = manager.load();
+                manager.save();
+
+                String json = Files.readString(directory.resolve(ConfigManager.CONFIG_FILE), StandardCharsets.UTF_8);
+                assertTrue(json.startsWith("//"), "a saved file should explain itself");
+                assertTrue(json.contains(ConfigManager.EXAMPLE_FILE),
+                                "a saved file should point at the annotated reference");
+                assertFalse(json.contains("\"secret\""), "the secret must not be written here");
+                assertEquals(config.api().port(), new ConfigManager(directory).load().api().port(),
+                                "the pointer must not disturb the settings");
+        }
+
+        @Test
+        void theReferenceCopyIsRefreshedNotDuplicated(@TempDir Path directory) throws Exception {
+                ConfigManager manager = new ConfigManager(directory);
+                manager.load();
+                manager.save();
+                manager.save();
+
+                long count;
+                try (var stream = Files.list(directory)) {
+                        count = stream.filter(p -> p.getFileName().toString().startsWith("unionkitbot.example"))
+                                        .count();
+                }
+                assertEquals(1L, count, "repeated saves must not accumulate reference copies");
+        }
+
+        @Test
         void anUnreadableFileIsBackedUpRatherThanDiscarded(@TempDir Path directory) throws Exception {
                 Path file = directory.resolve(ConfigManager.CONFIG_FILE);
                 Files.createDirectories(directory);

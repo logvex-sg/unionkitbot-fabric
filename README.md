@@ -37,7 +37,7 @@ reference on the same topics; you do not need them to get running.
 
 | Requirement | Version | Why |
 | --- | --- | --- |
-| JDK | 21 | To build the mod |
+| JDK | 21 or newer | To build the mod; Gradle provisions JDK 25 for Loom itself |
 | Node.js | 20.11+ | To run the Discord bot |
 | Minecraft Java Edition | 1.21.11 | With a Fabric profile |
 | Fabric Loader | for 1.21.11 | From the Fabric installer |
@@ -213,7 +213,8 @@ configuration screen, or use `/unionkitbot`, `/unionkitbot status`,
 | `401 unauthorized` on connect | Secrets differ. Run `npm run doctor`: it compares the two values and tells you which side is wrong |
 | `403 forbidden` on connect | Mod bound to a non-loopback address while `api.allowRemote` is `false` |
 | `missing required environment variable` | Bot exits naming the variable; run `npm run setup` to fill in the required values |
-| Edits to `unionkitbot.json` seem ignored | Fixed in this release. If you have an old file, delete it and restart: the mod rewrites it fully commented. A rejected file is now copied to `unionkitbot.json.invalid` instead of being lost |
+| Edits to `unionkitbot.json` seem ignored | Fixed in this release. If you have an old file, delete it and restart; a fresh one is written fully commented. A rejected file is copied to `unionkitbot.json.invalid` instead of being lost |
+| Comments vanished from `unionkitbot.json` | Expected after a save. Every option is documented in `unionkitbot.example.json` beside it, which the mod keeps up to date |
 | Commands missing in Discord | Set `DISCORD_GUILD_ID` for instant registration; global commands take up to an hour. Check the `applications.commands` scope |
 | Commands time out | The mod answers on the client thread; a paused, minimised or sleeping client times out |
 | Automation idle | Automation is off by default. Run `/start`, check a module is on, and check `/tasks` |
@@ -303,8 +304,8 @@ and deployed on its own. The protocol version number is the contract.
 
 ## 2. Building the Fabric 1.21.11 mod
 
-Requirements: JDK 21, plus network access for the first build (Loom downloads
-Minecraft, the Mojang mappings and Fabric API).
+Requirements: any JDK 21 or newer, plus network access for the first build (Loom
+downloads Minecraft, the Mojang mappings and Fabric API).
 
 ```bash
 cd minecraft-mod
@@ -312,6 +313,13 @@ cd minecraft-mod
 ```
 
 On Windows use `gradlew.bat build`.
+
+You do not need to install a second JDK or set `JAVA_HOME`. The mod compiles
+against Java 21, but Fabric Loom 1.18.2 itself requires a JVM 25 runtime. Rather
+than making that your problem, `gradle/gradle-daemon-jvm.properties` tells Gradle
+to run its daemon on JDK 25, and the Foojay resolver in `settings.gradle` fetches
+one automatically if the machine does not already have it. The first build is
+therefore a little slower while that download happens.
 
 Outputs land in `minecraft-mod/build/libs/`:
 
@@ -566,10 +574,14 @@ Written on first launch, fully commented, and re-readable without recompiling.
 Editable from the in-game screen, from Discord with `/config`, or by hand.
 
 `//` and `/* ... */` comments are accepted, so you can annotate your own changes
-without them breaking the load. The mod rewrites the file without comments the next
-time it saves, so keep anything you want to persist in the table below rather than
-only in a comment. Unknown keys are rejected by name rather than ignored, which
-turns a typo into a clear error instead of a silent fallback.
+without them breaking the load. Unknown keys are rejected by name rather than
+ignored, which turns a typo into a clear error instead of a silent fallback.
+
+A save cannot carry comments through the serialiser, so the mod keeps a fully
+annotated copy at `unionkitbot.example.json` beside the live file and rewrites it
+whenever the template changes. A saved `unionkitbot.json` also opens with a short
+comment block naming that copy and where the secret lives, so the file explains
+itself even after an automated settings change.
 
 The file on disk omits `api.secret` entirely - the authoritative value lives in
 `unionkitbot.secret`, and keeping it out means this JSON is safe to paste into a

@@ -32,6 +32,31 @@ public final class ConfigManager {
 	/** File name holding the API secret. */
 	public static final String SECRET_FILE = "unionkitbot.secret";
 
+	/**
+	 * File name of the annotated reference copy, rewritten whenever the template is
+	 * available.
+	 *
+	 * <p>Comments cannot survive a round trip through the serialiser, so the live
+	 * document loses its annotations the first time anything is saved. Keeping the
+	 * annotated version beside it means the documentation is always one file away
+	 * instead of being destroyed by the first settings change.
+	 *
+	 * <p>The extension is not {@code .json} so nothing loads it by accident.
+	 */
+	public static final String EXAMPLE_FILE = "unionkitbot.example.json";
+
+	/**
+	 * Comment lines prepended to every saved configuration document.
+	 *
+	 * <p>A save cannot carry the surrounding annotations through, so the document
+	 * states where to find them rather than silently appearing to have lost them.
+	 */
+	private static final String SAVE_HEADER =
+			"// UnionKitBot Fabric configuration.\n"
+			+ "// Written by the mod; comments here do not survive the next save.\n"
+			+ "// unionkitbot.example.json, next to this file, documents every option.\n"
+			+ "// The API secret is stored separately in unionkitbot.secret.\n";
+
 	/** Environment variable that overrides the secret file. */
 	public static final String SECRET_ENV = "UNIONKITBOT_API_SECRET";
 
@@ -145,6 +170,9 @@ public final class ConfigManager {
 				writeTemplate(file, seed.text());
 			}
 		}
+		// Keep the documentation available even for a configuration the operator has
+		// never saved, so a hand-edited file can always be checked against it.
+		refreshReferenceCopy();
 		notifyListeners(loaded);
 		return loaded;
 	}
@@ -199,6 +227,34 @@ public final class ConfigManager {
 		} catch (IOException e) {
 			lastLoadError = "cannot write " + file + ": " + e.getMessage();
 			return false;
+		}
+	}
+
+	/**
+	 * Refreshes the annotated reference copy beside the live document.
+	 *
+	 * <p>Best effort by design: failing to write documentation must never fail a
+	 * settings save, so a problem is noted and cleared rather than propagating.
+	 */
+	private void refreshReferenceCopy() {
+		TemplateSeed seed = readTemplate();
+		if (seed == null) {
+			return;
+		}
+		String existing;
+		try {
+			existing = Files.readString(directory.resolve(EXAMPLE_FILE), StandardCharsets.UTF_8);
+		} catch (IOException e) {
+			existing = null;
+		}
+		if (seed.text().equals(existing)) {
+			return;
+		}
+		String previousError = lastLoadError;
+		writeTemplate(directory.resolve(EXAMPLE_FILE), seed.text());
+		if (lastLoadError != null && !lastLoadError.equals(previousError)) {
+			// Surfaced through the log sink, then cleared so a healthy save is not reported as failed.
+			lastLoadError = previousError;
 		}
 	}
 
@@ -355,7 +411,7 @@ public final class ConfigManager {
 		Path temp = directory.resolve(CONFIG_FILE + ".tmp");
 		try {
 			Files.createDirectories(directory);
-			String text = Json.writePretty(current.get().toFileJson());
+			String text = SAVE_HEADER + Json.writePretty(current.get().toFileJson());
 			Files.writeString(temp, text, StandardCharsets.UTF_8);
 			try {
 				Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
@@ -363,6 +419,7 @@ public final class ConfigManager {
 				// Some filesystems refuse ATOMIC_MOVE; a plain replace is still safe here.
 				Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING);
 			}
+			refreshReferenceCopy();
 			return true;
 		} catch (IOException e) {
 			lastLoadError = "cannot write " + file + ": " + e.getMessage();

@@ -3,7 +3,11 @@
   //
   // This file is created on first launch and read back on every start. It is
   // edited from the in-game screen, from Discord with /config, or by hand.
-  // Comments are allowed here; they are removed the next time the mod saves.
+  //
+  // Comments are accepted here. A save cannot carry them through the serialiser,
+  // so the mod keeps this annotated copy at unionkitbot.example.json beside the
+  // live file and re-writes it whenever it changes. Consult that copy rather than
+  // trusting a comment to survive an edit.
   //
   // The API secret is deliberately absent: it lives in the sibling
   // unionkitbot.secret file so this document can be shared when reporting a bug.
