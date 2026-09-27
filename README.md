@@ -97,9 +97,20 @@ secret needed in step 0.6. Confirm it exists:
 cat ~/.minecraft/config/unionkitbot/unionkitbot.secret
 ```
 
-You should see a 64-character hex string. The mod also writes `unionkitbot.json`
-alongside it, holding the non-secret settings. That JSON is safe to share when
-reporting a bug, because the secret is deliberately kept out of it.
+You should see a 64-character hex string. You do not need to copy it by hand -
+`npm run setup` in step 0.6 reads it for you.
+
+The mod also writes `unionkitbot.json` alongside it. That file arrives fully
+commented, explaining every option and its default, so you do not need to consult
+section 9 before changing something:
+
+```bash
+cat ~/.minecraft/config/unionkitbot/unionkitbot.json
+```
+
+The JSON is safe to share when reporting a bug, because the secret is deliberately
+kept in the separate `.secret` file. The secret file is generated with owner-only
+permissions where the filesystem supports it.
 
 ### 0.5 Create the Discord application
 
@@ -124,51 +135,59 @@ yourself and choose **Copy User ID**.
 ```bash
 cd discord-bot
 npm install
-cp .env.example .env
+npm run build
+npm run setup
 ```
 
-Fill in the values that matter:
+`npm run setup` is an interactive wizard. It asks only for the values that are
+genuinely per-install, then writes `.env` for you:
+
+| It asks for | Where to get it |
+| --- | --- |
+| Discord bot token | Developer Portal → your app → **Bot** → **Reset Token** |
+| Discord application ID | Developer Portal → your app → **General Information** |
+| Admin user IDs | Right-click yourself in Discord → **Copy User ID** (Developer Mode on) |
+| Mod API secret | Read automatically from `unionkitbot.secret`; you only type it if the file is not found |
+
+It validates each answer before writing anything, quotes values a dotenv parser
+could misread, keeps any lines it does not manage, and re-running it is safe.
+The resulting `.env` is created with `0600` permissions where the filesystem
+supports it. If Minecraft lives somewhere unusual, point it at the directory:
 
 ```bash
-DISCORD_TOKEN=                 # from 0.5
-DISCORD_APPLICATION_ID=        # from 0.5
-DISCORD_ADMIN_USER_IDS=        # your user ID; comma-separated for several people
-MOD_API_SECRET=                # from 0.4
+UNIONKITBOT_MOD_DIR=/path/to/config/unionkitbot npm run setup
 ```
 
-Everything else has a sensible default; see section 5 for the full table. You must set
-at least one admin user ID or admin role ID, because there is no "allow everyone"
-fallback and the bot refuses to start without one.
-
-Lock the file down, then copy the mod secret into it:
+Then confirm everything is wired up before starting:
 
 ```bash
-chmod 600 .env
-sed -i "s|^MOD_API_SECRET=.*|MOD_API_SECRET=$(cat ~/.minecraft/config/unionkitbot/unionkitbot.secret)|" .env
-npm run build && npm test
+npm run doctor
 ```
 
-Verify without printing the secrets to your terminal scrollback:
+`doctor` verifies the token against Discord, checks that the application ID
+belongs to that token, compares the secret in `.env` with the mod's secret file,
+and probes the mod. It prints a `PASS`/`WARN`/`FAIL` line per check with a hint
+next to anything that needs action, and never prints a secret. Expect `WARN` for
+the mod checks when Minecraft is not running - that is normal, not a fault.
+
+Finally:
 
 ```bash
-grep -E '^(DISCORD_TOKEN|DISCORD_APPLICATION_ID|DISCORD_ADMIN_USER_IDS|MOD_API_SECRET)=' .env | sed 's/=.\{6\}.*/=<set>/'
-```
-
-Then start it:
-
-```bash
-npm run register-commands
 npm start
 ```
 
-Commands are also registered automatically on every startup, so `register-commands` is
-mainly a convenience while iterating. Use `npm run dev` to recompile TypeScript on
-change.
+Commands are also registered automatically on every startup. Use `npm run
+register-commands` to refresh the definitions without starting the controller,
+and `npm run dev` to recompile TypeScript on change.
 
 Startup order does not matter. Start the bot first and it retries with exponential
-backoff and jitter until Minecraft appears; start Minecraft first and the bot connects
-on its next attempt. Stop with Ctrl+C: the bot handles `SIGINT` and `SIGTERM`, closes
-the mod socket and destroys the Discord client, leaving no half-open socket behind.
+backoff and jitter until Minecraft appears; start Minecraft first and the bot
+connects on its next attempt. Stop with Ctrl+C: the bot handles `SIGINT` and
+`SIGTERM`, closes the mod socket and destroys the Discord client, leaving no
+half-open socket behind.
+
+Everything except the four required values has a sensible default. Section 5 lists
+the full set if you want to tune it by hand.
 
 ### 0.7 Verify
 
@@ -191,9 +210,10 @@ configuration screen, or use `/unionkitbot`, `/unionkitbot status`,
 | --- | --- |
 | `./gradlew: Permission denied` | Run `chmod +x gradlew` |
 | Bot says the client is unreachable | Minecraft not running with the mod, or `MOD_API_URL` does not match `api.host`/`api.port` |
-| `401 unauthorized` on connect | Secrets differ; re-read `unionkitbot.secret` and copy it exactly. Trailing whitespace is the usual cause |
+| `401 unauthorized` on connect | Secrets differ. Run `npm run doctor`: it compares the two values and tells you which side is wrong |
 | `403 forbidden` on connect | Mod bound to a non-loopback address while `api.allowRemote` is `false` |
-| `missing required environment variable` | Bot exits naming the variable; set `DISCORD_TOKEN`, `DISCORD_APPLICATION_ID` and `MOD_API_SECRET` |
+| `missing required environment variable` | Bot exits naming the variable; run `npm run setup` to fill in the required values |
+| Edits to `unionkitbot.json` seem ignored | Fixed in this release. If you have an old file, delete it and restart: the mod rewrites it fully commented. A rejected file is now copied to `unionkitbot.json.invalid` instead of being lost |
 | Commands missing in Discord | Set `DISCORD_GUILD_ID` for instant registration; global commands take up to an hour. Check the `applications.commands` scope |
 | Commands time out | The mod answers on the client thread; a paused, minimised or sleeping client times out |
 | Automation idle | Automation is off by default. Run `/start`, check a module is on, and check `/tasks` |
@@ -542,8 +562,19 @@ curl -sS -X POST http://127.0.0.1:8765/command \
 
 ### Mod: `config/unionkitbot/unionkitbot.json`
 
-Written with defaults on first launch and re-readable without recompiling. Editable
-from the in-game screen, from Discord with `/config`, or by hand.
+Written on first launch, fully commented, and re-readable without recompiling.
+Editable from the in-game screen, from Discord with `/config`, or by hand.
+
+`//` and `/* ... */` comments are accepted, so you can annotate your own changes
+without them breaking the load. The mod rewrites the file without comments the next
+time it saves, so keep anything you want to persist in the table below rather than
+only in a comment. Unknown keys are rejected by name rather than ignored, which
+turns a typo into a clear error instead of a silent fallback.
+
+The file on disk omits `api.secret` entirely - the authoritative value lives in
+`unionkitbot.secret`, and keeping it out means this JSON is safe to paste into a
+bug report. If a load fails, the rejected file is copied to
+`unionkitbot.json.invalid` and named in the log, so a hand-edit is never lost.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -584,8 +615,9 @@ ignored. The API secret is not in this file; it lives in `unionkitbot.secret` or
 
 ### Discord bot: `.env`
 
-See section 5. The defaults suit a same-machine setup: loopback URL, no TLS,
-one-second minimum backoff.
+Create it with `npm run setup` rather than by hand, and check it with
+`npm run doctor`. The defaults suit a same-machine setup: loopback URL, no TLS,
+one-second minimum backoff. `.env.example` documents every option.
 
 ### Keeping the two in sync
 

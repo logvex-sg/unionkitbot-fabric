@@ -1,0 +1,99 @@
+{
+  // UnionKitBot Fabric configuration.
+  //
+  // This file is created on first launch and read back on every start. It is
+  // edited from the in-game screen, from Discord with /config, or by hand.
+  // Comments are allowed here; they are removed the next time the mod saves.
+  //
+  // The API secret is deliberately absent: it lives in the sibling
+  // unionkitbot.secret file so this document can be shared when reporting a bug.
+
+  // Master switch. Automation stays off until you start it, with /start in
+  // Discord or the in-game screen. Reporting IDLE while this is false is normal.
+  "enabled": false,
+
+  // Diagnostics verbosity: TRACE, DEBUG, INFO, WARN or ERROR.
+  "logLevel": "INFO",
+
+  // Control API. This is what the Discord bot connects to.
+  "api": {
+    // Bind address. Keep loopback unless you really need remote control.
+    "host": "127.0.0.1",
+    // Bind port. Must match MOD_API_URL in the bot's .env.
+    "port": 8765,
+    // Accept clients that are not on this machine. Only enable together with a
+    // TLS proxy and an explicit allowedOrigins list, on a network you control.
+    "allowRemote": false,
+    // Origins accepted by the WebSocket handshake. Empty accepts any origin,
+    // which is fine while allowRemote is false.
+    "allowedOrigins": [],
+    // Seconds between status frames.
+    "heartbeatSeconds": 10,
+    // Largest accepted request body, in bytes.
+    "maxPayloadBytes": 262144
+  },
+
+  // Turn individual automation modules on or off. The agent only runs work that
+  // a module can carry out, so disabling all four leaves tasks queued forever.
+  "modules": {
+    "navigation": true,
+    "delivery": true,
+    "scanning": true,
+    "recovery": true
+  },
+
+  // Execution limits.
+  "limits": {
+    // Minimum delay between agent ticks, in milliseconds. 50 is 20 ticks/second.
+    "tickIntervalMs": 100,
+    // Attempts before a task fails permanently.
+    "maxAttempts": 3,
+    // Wall-clock budget for one attempt, in milliseconds.
+    "taskTimeoutMs": 120000,
+    // Ticks without positional progress before recovery kicks in.
+    "stuckTicks": 100,
+    // Maximum number of queued tasks.
+    "maxQueueSize": 128
+  },
+
+  // Navigation module.
+  "navigation": {
+    // Distance at which a destination counts as reached, in blocks.
+    "arriveRadius": 1.5,
+    // Ticks between movement input updates. Raise it to move less jerkily.
+    "stepTicks": 2,
+    // Optional recorded home point. Set with /config home in Discord or the
+    // in-game screen. Leave the braces empty when you have not set one yet.
+    "home": {}
+  },
+
+  // Delivery module.
+  "delivery": {
+    // Distance at which a hand-off is attempted, in blocks.
+    "interactRadius": 3.0,
+    // Item ids allowed to be delivered. Empty means any item.
+    "itemWhitelist": [],
+    // Recipient used when a task does not name one.
+    "defaultTargetPlayer": ""
+  },
+
+  // Scanning module.
+  "scan": {
+    // Horizontal search radius, in blocks.
+    "radius": 24,
+    // Vertical search radius, in blocks.
+    "verticalRadius": 8,
+    // Maximum entries returned by a single scan.
+    "maxResults": 256
+  },
+
+  // Recovery module.
+  "recovery": {
+    // Base delay between recovery attempts, in milliseconds.
+    "backoffMillis": 1000,
+    // Backoff ceiling, in milliseconds.
+    "maxBackoffMillis": 30000,
+    // Delay before leaving DISCONNECTED, in milliseconds.
+    "disconnectGraceMillis": 5000
+  }
+}

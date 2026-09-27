@@ -37,8 +37,22 @@ public record AgentConfig(
 	/** Replacement text used whenever a secret would otherwise be serialised. */
 	public static final String REDACTED = "<redacted>";
 
+	/**
+	 * Limits that the nested {@link ApiConfig} record needs to read.
+	 *
+	 * <p>A nested record cannot see the enclosing record's own static fields, so the
+	 * value lives here rather than being duplicated inside {@code ApiConfig}.
+	 */
+	public static final class SecretPolicy {
+		/** Shortest accepted API secret. */
+		public static final int MIN_LENGTH = 16;
+
+		private SecretPolicy() {
+		}
+	}
+
 	/** Shortest accepted API secret. */
-	public static final int MIN_SECRET_LENGTH = 16;
+	public static final int MIN_SECRET_LENGTH = SecretPolicy.MIN_LENGTH;
 
 	/**
 	 * Control API settings.
@@ -63,7 +77,11 @@ public record AgentConfig(
 		public ApiConfig {
 			host = (host == null || host.isBlank()) ? "127.0.0.1" : host.trim();
 			port = clamp(port, 1, 65535);
-			secret = secret == null ? "" : secret;
+			// Releases before the secret was dropped from the on-disk document wrote the
+			// redaction placeholder into it. Treat that value as "no secret configured"
+			// so an existing file loads cleanly and the secret is re-resolved, instead of
+			// failing validation and resetting every other setting.
+			secret = secret == null || REDACTED.equals(secret.trim()) ? "" : secret;
 			heartbeatSeconds = clamp(heartbeatSeconds, 1, 600);
 			maxPayloadBytes = clamp(maxPayloadBytes, 1024, 8 * 1024 * 1024);
 			allowedOrigins = allowedOrigins == null ? List.of() : List.copyOf(allowedOrigins);
@@ -266,6 +284,26 @@ public record AgentConfig(
 		/**
 		 * @return JSON representation
 		 */
+		/**
+		 * On-disk representation. An unset home point is written as an empty object
+		 * rather than an object of nulls, which the loader would reject.
+		 *
+		 * @return the on-disk JSON representation
+		 */
+		public JsonObject toFileJson() {
+			JsonObject out = new JsonObject();
+			out.addProperty("arriveRadius", arriveRadius);
+			out.addProperty("stepTicks", stepTicks);
+			JsonObject home = new JsonObject();
+			if (homeX != null && homeY != null && homeZ != null) {
+				home.addProperty("x", homeX);
+				home.addProperty("y", homeY);
+				home.addProperty("z", homeZ);
+			}
+			out.add("home", home);
+			return out;
+		}
+
 		public JsonObject toJson() {
 			JsonObject out = new JsonObject();
 			out.addProperty("arriveRadius", arriveRadius);
@@ -416,6 +454,36 @@ public record AgentConfig(
 	}
 
 	/**
+	 * JSON document written to disk.
+	 *
+	 * <p>Differs from {@link #toJson()} in the two places that decide whether the
+	 * document can be read back. Secret members are omitted rather than emitted as
+	 * {@link #REDACTED}, because the loader validates what it reads and a redaction
+	 * placeholder is not a usable secret — writing it made every later load reject the
+	 * whole file, silently resetting every setting an operator had edited. The
+	 * navigation home point is written as an empty object when unset, since explicit
+	 * nulls read back as a malformed position.
+	 *
+	 * @return the on-disk JSON representation
+	 */
+	public JsonObject toFileJson() {
+		JsonObject out = new JsonObject();
+		out.addProperty("enabled", enabled);
+		out.addProperty("logLevel", logLevel.name());
+		JsonObject apiForFile = api.toJson();
+		apiForFile.remove("secret");
+		apiForFile.remove("secretConfigured");
+		out.add("api", apiForFile);
+		out.add("modules", modules.toJson());
+		out.add("limits", limits.toJson());
+		out.add("navigation", navigation.toFileJson());
+		out.add("delivery", delivery.toJson());
+		out.add("scan", scan.toJson());
+		out.add("recovery", recovery.toJson());
+		return out;
+	}
+
+	/**
 	 * Applies a partial update. Unknown keys are rejected so typos surface instead
 	 * of being silently ignored.
 	 *
@@ -478,7 +546,13 @@ public record AgentConfig(
 				case "port" -> port = (int) requireInteger("api.port", entry.getValue());
 				case "secret" -> {
 					secret = requireStringValue("api.secret", entry.getValue());
-					ApiConfig.requireSecret(secret);
+					// A document written by an older release carries the redaction
+					// placeholder here. It means "no secret in this file", and the
+					// authoritative value still comes from the secret file, so it must not
+					// fail validation.
+					if (!REDACTED.equals(secret.trim())) {
+						ApiConfig.requireSecret(secret);
+					}
 				}
 				case "allowRemote" -> allowRemote = requireBoolean("api.allowRemote", entry.getValue());
 				case "heartbeatSeconds" -> heartbeat = (int) requireInteger("api.heartbeatSeconds", entry.getValue());
@@ -533,7 +607,10 @@ public record AgentConfig(
 				case "stepTicks" -> step = (int) requireInteger("navigation.stepTicks", entry.getValue());
 				case "home" -> {
 					JsonObject home = requireObject("navigation.home", entry.getValue());
-					if (home.isEmpty()) {
+					// A home point counts as absent when the object is empty or when every
+					// member is null. Written-out nulls mean "not set", not a malformed
+					// position, so a hand-edited or older file still loads.
+					if (isUnset(home)) {
 						hx = null;
 						hy = null;
 						hz = null;
@@ -592,6 +669,23 @@ public record AgentConfig(
 			}
 		}
 		return new RecoveryConfig(backoff, max, grace);
+	}
+
+	/**
+	 * @param object the object to inspect
+	 * @return {@code true} when the object has no members, or every member is JSON null
+	 */
+	private static boolean isUnset(JsonObject object) {
+		if (object == null || object.isEmpty()) {
+			return true;
+		}
+		for (Map.Entry<String, JsonElement> entry : object.entrySet()) {
+			JsonElement value = entry.getValue();
+			if (value != null && !value.isJsonNull()) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private static JsonObject requireObject(String path, JsonElement value) {

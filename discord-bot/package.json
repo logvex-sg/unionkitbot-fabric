@@ -16,7 +16,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "register-commands": "node dist/register-commands.js"
+    "register-commands": "node dist/register-commands.js",
+    "setup": "node dist/setup.js",
+    "doctor": "node dist/doctor.js"
   },
   "dependencies": {
     "discord.js": "^14.27.0",

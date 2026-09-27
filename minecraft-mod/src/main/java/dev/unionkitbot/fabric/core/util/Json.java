@@ -91,6 +91,87 @@ public final class Json {
 	}
 
 	/**
+	 * Parses text into a JSON object, allowing {@code //} and {@code /* *}{@code /}
+	 * comments.
+	 *
+	 * <p>Used for the configuration document only. The protocol layer keeps the
+	 * strict {@link #parseObject(String, String)} so a malformed frame is still
+	 * reported rather than quietly repaired.
+	 *
+	 * @param text the JSON text, optionally containing comments
+	 * @param path the path to report on failure
+	 * @return the parsed object
+	 * @throws JsonProblem when the text is not a JSON object
+	 */
+	public static JsonObject parseObjectWithComments(String text, String path) {
+		return parseObject(stripComments(text), path);
+	}
+
+	/**
+	 * Removes {@code //} and {@code /* *}{@code /} comments from JSON text.
+	 *
+	 * <p>Comments are a convenience for a file people are expected to edit by hand.
+	 * Gson's lenient mode does not handle them, and rather than enable a mode that
+	 * would also accept malformed documents, they are removed here. Comment
+	 * sequences inside string literals are preserved, so a value such as a URL is
+	 * not truncated.
+	 *
+	 * @param text the text to process
+	 * @return the text with comments replaced by whitespace
+	 */
+	public static String stripComments(String text) {
+		if (text == null || text.isEmpty()) {
+			return text == null ? "" : text;
+		}
+		StringBuilder out = new StringBuilder(text.length());
+		boolean inString = false;
+		boolean escaped = false;
+		for (int i = 0; i < text.length(); i++) {
+			char current = text.charAt(i);
+			char next = i + 1 < text.length() ? text.charAt(i + 1) : '\0';
+
+			if (inString) {
+				out.append(current);
+				if (escaped) {
+					escaped = false;
+				} else if (current == '\\') {
+					escaped = true;
+				} else if (current == '"') {
+					inString = false;
+				}
+				continue;
+			}
+
+			if (current == '"') {
+				inString = true;
+				out.append(current);
+				continue;
+			}
+			if (current == '/' && next == '/') {
+				while (i < text.length() && text.charAt(i) != '\n') {
+					i++;
+				}
+				out.append('\n');
+				continue;
+			}
+			if (current == '/' && next == '*') {
+				i += 2;
+				while (i < text.length() && !(text.charAt(i) == '*' && i + 1 < text.length() && text.charAt(i + 1) == '/')) {
+					// Newlines are kept so a parse error still points at a sane line.
+					if (text.charAt(i) == '\n') {
+						out.append('\n');
+					}
+					i++;
+				}
+				i++;
+				continue;
+			}
+			out.append(current);
+		}
+		return out.toString();
+	}
+
+	/**
 	 * Parses text into a JSON object.
 	 *
 	 * @param text the JSON text

@@ -1,6 +1,7 @@
 package dev.unionkitbot.fabric.config;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
@@ -33,6 +34,15 @@ public final class ConfigManager {
 
 	/** Environment variable that overrides the secret file. */
 	public static final String SECRET_ENV = "UNIONKITBOT_API_SECRET";
+
+	/**
+	 * Classpath resource holding the annotated configuration template.
+	 *
+	 * <p>Seeding a fresh install from this rather than from serialised defaults is
+	 * what makes the file self-explanatory: every option arrives with a comment
+	 * describing it, so there is nothing to look up before editing.
+	 */
+	public static final String TEMPLATE_RESOURCE = "/unionkitbot.example.json";
 
 	/** Length in bytes of a generated secret; 32 bytes is 256 bits of entropy. */
 	private static final int GENERATED_SECRET_BYTES = 32;
@@ -99,27 +109,115 @@ public final class ConfigManager {
 	public AgentConfig load() {
 		Path file = directory.resolve(CONFIG_FILE);
 		AgentConfig loaded = AgentConfig.defaults();
+		TemplateSeed seed = null;
 		if (Files.isRegularFile(file)) {
 			try {
 				String text = Files.readString(file, StandardCharsets.UTF_8);
-				JsonObject object = Json.parseObject(text, CONFIG_FILE);
+				// Comments are accepted so the file can carry notes next to each option.
+				JsonObject object = Json.parseObjectWithComments(text, CONFIG_FILE);
 				loaded = AgentConfig.fromJson(object);
 				lastLoadError = null;
 			} catch (IOException e) {
 				lastLoadError = "cannot read " + file + ": " + e.getMessage();
 			} catch (Json.JsonProblem e) {
-				lastLoadError = "invalid configuration at " + e.path() + ": " + e.getMessage();
+				// The file is left untouched on disk, so back it up before anything can
+				// overwrite it. Otherwise the invalid document is replaced by defaults and
+				// the operator loses the settings they were writing.
+				String backup = backUpUnreadable(file);
+				lastLoadError = "invalid configuration at " + e.path() + ": " + e.getMessage()
+						+ (backup == null ? "" : "; the rejected file was copied to " + backup);
 			}
 		} else {
+			// No file yet: start from the annotated template so the operator gets a
+			// documented file rather than a bare serialisation of the defaults.
 			lastLoadError = null;
+			seed = readTemplate();
+			if (seed != null) {
+				loaded = seed.config();
+			}
 		}
 		loaded = resolveSecret(loaded);
 		current.set(loaded);
 		if (!Files.isRegularFile(file)) {
-			save();
+			if (seed == null) {
+				save();
+			} else {
+				writeTemplate(file, seed.text());
+			}
 		}
 		notifyListeners(loaded);
 		return loaded;
+	}
+
+	/**
+	 * The bundled template's raw text and its parsed configuration.
+	 *
+	 * @param text the file contents, written verbatim so comments are preserved
+	 * @param config the parsed configuration the text represents
+	 */
+	private record TemplateSeed(String text, AgentConfig config) {
+	}
+
+	/**
+	 * Reads the bundled configuration template.
+	 *
+	 * @return the seed, or {@code null} when the resource is missing or unusable,
+	 *         in which case plain defaults are used and a warning is recorded
+	 */
+	private TemplateSeed readTemplate() {
+		try (InputStream in = ConfigManager.class.getResourceAsStream(TEMPLATE_RESOURCE)) {
+			if (in == null) {
+				lastLoadError = "bundled template " + TEMPLATE_RESOURCE
+						+ " is missing; wrote plain defaults instead";
+				return null;
+			}
+			String text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+			AgentConfig parsed = AgentConfig.fromJson(Json.parseObjectWithComments(text, TEMPLATE_RESOURCE));
+			return new TemplateSeed(text, parsed);
+		} catch (IOException e) {
+			lastLoadError = "cannot read the bundled template: " + e.getMessage();
+			return null;
+		} catch (Json.JsonProblem e) {
+			lastLoadError = "the bundled template is invalid at " + e.path() + ": " + e.getMessage();
+			return null;
+		}
+	}
+
+	/**
+	 * Writes the annotated template, which carries the comments a fresh install
+	 * benefits from.
+	 *
+	 * @param file the destination
+	 * @param text the template contents
+	 * @return {@code true} when the write succeeded
+	 */
+	private boolean writeTemplate(Path file, String text) {
+		try {
+			Files.createDirectories(directory);
+			Files.writeString(file, text, StandardCharsets.UTF_8);
+			return true;
+		} catch (IOException e) {
+			lastLoadError = "cannot write " + file + ": " + e.getMessage();
+			return false;
+		}
+	}
+
+	/**
+	 * Copies an unreadable configuration file aside so it survives the save that
+	 * follows a failed load.
+	 *
+	 * @param file the file that failed to parse
+	 * @return the backup path, or {@code null} when no backup was made
+	 */
+	private String backUpUnreadable(Path file) {
+		Path backup = directory.resolve(CONFIG_FILE + ".invalid");
+		try {
+			Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
+			return backup.toString();
+		} catch (IOException e) {
+			lastLoadError = "cannot back up " + file + ": " + e.getMessage();
+			return null;
+		}
 	}
 
 	/**
@@ -246,7 +344,9 @@ public final class ConfigManager {
 	}
 
 	/**
-	 * Writes the current configuration to disk. The secret is never written.
+	 * Writes the current configuration to disk. See {@link AgentConfig#toFileJson()}
+	 * for why this is not simply {@link AgentConfig#toJson()}: the document has to be
+	 * readable again, and the secret is never written.
 	 *
 	 * @return {@code true} when the write succeeded
 	 */
@@ -255,7 +355,7 @@ public final class ConfigManager {
 		Path temp = directory.resolve(CONFIG_FILE + ".tmp");
 		try {
 			Files.createDirectories(directory);
-			String text = Json.writePretty(current.get().toJson());
+			String text = Json.writePretty(current.get().toFileJson());
 			Files.writeString(temp, text, StandardCharsets.UTF_8);
 			try {
 				Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
